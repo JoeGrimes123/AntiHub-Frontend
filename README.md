@@ -13,7 +13,7 @@ Then, install the packages required using `pnpm` and start your development serv
 ```bash
 pnpm install
 
-pnpm dev
+pnpm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
