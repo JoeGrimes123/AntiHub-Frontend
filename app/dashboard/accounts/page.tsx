@@ -467,7 +467,7 @@ export default function AccountsPage() {
             <div className="space-y-3">
               <Label className="text-base font-semibold">步骤 1: 打开授权页面</Label>
               <p className="text-sm text-muted-foreground">
-                点击下方按钮在新标签页中打开 ChatGPT OAuth 授权页面
+                点击下方按钮在新标签页中打开 Google OAuth 授权页面
               </p>
               <Button
                 onClick={handleOpenOAuthUrl}
