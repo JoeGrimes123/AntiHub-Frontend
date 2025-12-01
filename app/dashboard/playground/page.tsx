@@ -495,9 +495,9 @@ export default function PlaygroundPage() {
               onValueChange={(value: number[]) =>
                 setConfig(prev => ({ ...prev, frequencyPenalty: value[0] }))
               }
-              min={0}
+              min={-2}
               max={2}
-              step={0.1}
+              step={0.01}
               aria-label="Frequency Penalty"
             />
           </div>
@@ -516,9 +516,9 @@ export default function PlaygroundPage() {
               onValueChange={(value: number[]) =>
                 setConfig(prev => ({ ...prev, presencePenalty: value[0] }))
               }
-              min={0}
+              min={-2}
               max={2}
-              step={0.1}
+              step={0.01}
               aria-label="Presence Penalty"
             />
           </div>
@@ -599,9 +599,9 @@ export default function PlaygroundPage() {
               <Slider
                 value={[config.frequencyPenalty]}
                 onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, frequencyPenalty: value[0] }))}
-                min={0}
+                min={-2}
                 max={2}
-                step={0.1}
+                step={0.01}
                 aria-label="Frequency Penalty"
               />
             </div>
@@ -616,9 +616,9 @@ export default function PlaygroundPage() {
               <Slider
                 value={[config.presencePenalty]}
                 onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, presencePenalty: value[0] }))}
-                min={0}
+                min={-2}
                 max={2}
-                step={0.1}
+                step={0.01}
                 aria-label="Presence Penalty"
               />
             </div>
