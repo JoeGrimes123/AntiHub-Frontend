@@ -51,7 +51,7 @@ import {
   PromptInputActionAddAttachments,
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input';
-import { CopyIcon, TrashIcon, EditIcon, CheckIcon as CheckIconLucide, XIcon, PlusIcon, SlidersHorizontalIcon, DownloadIcon, InfoIcon } from 'lucide-react';
+import { CopyIcon, TrashIcon, EditIcon, CheckIcon as CheckIconLucide, XIcon, PlusIcon, SlidersHorizontalIcon, DownloadIcon, InfoIcon, RefreshCwIcon } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import {
@@ -100,8 +100,8 @@ interface ImageGenConfig {
 const isImageGenerationModel = (modelName: string): boolean => {
   const lowerName = modelName.toLowerCase();
   return lowerName.includes('image') ||
-         lowerName.includes('imagen') ||
-         (lowerName.includes('gemini') && lowerName.includes('image'));
+    lowerName.includes('imagen') ||
+    (lowerName.includes('gemini') && lowerName.includes('image'));
 };
 
 // 检测模型是否支持图片尺寸控制
@@ -181,7 +181,7 @@ const getAllModels = (): Array<{
       apiType: 'antigravity' as ApiType,
     };
   });
-  
+
   const kiroModels = Object.entries(KIRO_MODELS).map(([id, name]) => {
     const provider = getModelProvider(id);
     return {
@@ -192,17 +192,17 @@ const getAllModels = (): Array<{
       apiType: 'kiro' as ApiType,
     };
   });
-  
+
   return [...antigravityModels, ...kiroModels];
 };
 
 export default function PlaygroundPage() {
   // API 类型状态
   const [apiType, setApiType] = useState<ApiType>('antigravity');
-  
+
   // 获取所有模型列表
   const allModels = getAllModels();
-  
+
   const [model, setModel] = useState<string>('');
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const [status, setStatus] = useState<'submitted' | 'streaming' | 'ready' | 'error'>('ready');
@@ -218,7 +218,7 @@ export default function PlaygroundPage() {
     frequencyPenalty: 0,
     presencePenalty: 0,
   });
-  
+
   // 图片生成配置
   const [imageConfig, setImageConfig] = useState<ImageGenConfig>({
     aspectRatio: '1:1',
@@ -255,7 +255,7 @@ export default function PlaygroundPage() {
 
   // 检测当前选择的模型是否为图片生成模型
   const isImageModel = model ? isImageGenerationModel(model) : false;
-  
+
   // 当前是否处于图片生成模式（模型支持图片生成且用户选择了图片生成模式）
   const isInImageGenerationMode = isImageModel && imageModelMode === 'image';
 
@@ -263,13 +263,15 @@ export default function PlaygroundPage() {
 
   // 发送图片生成请求
   // Imagen 模式下每次生成都是独立上下文，API 不发送对话历史，但 UI 会显示之前的消息
+  // 支持文生图和图生图（通过 files 参数传入图片）
   const sendImageGenerationRequest = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, files?: any[]) => {
       if (!model) {
         toast.error('请先选择一个模型');
         return;
       }
 
+      // 构建用户消息（包含附件信息）
       const userMessage: MessageType = {
         key: `user-${Date.now()}`,
         from: 'user',
@@ -279,6 +281,12 @@ export default function PlaygroundPage() {
             content: prompt,
           },
         ],
+        attachments: files && files.length > 0 ? files.map(f => ({
+          type: 'file' as const,
+          url: f.url,
+          mediaType: f.mediaType || 'application/octet-stream',
+          filename: f.filename || 'attachment',
+        })) : undefined,
       };
 
       // UI 显示之前的消息，但 API 请求只发送当前 prompt（generateImage 函数已实现）
@@ -304,10 +312,26 @@ export default function PlaygroundPage() {
       const imageGenConfig: { aspectRatio: ImageAspectRatio; imageSize?: ImageSize } = {
         aspectRatio: imageConfig.aspectRatio,
       };
-      
+
       // 只有支持 imageSize 的模型才发送该参数
       if (supportsImageSize(model)) {
         imageGenConfig.imageSize = imageConfig.imageSize;
+      }
+
+      // 处理图生图：提取第一张图片作为输入
+      let inputImage: { mimeType: string; data: string } | undefined;
+      if (files && files.length > 0) {
+        const imageFile = files.find(f => f.mediaType?.startsWith('image/'));
+        if (imageFile && imageFile.url) {
+          // 从 data URL 中提取 base64 数据
+          const dataUrlMatch = imageFile.url.match(/^data:([^;]+);base64,(.+)$/);
+          if (dataUrlMatch) {
+            inputImage = {
+              mimeType: dataUrlMatch[1],
+              data: dataUrlMatch[2],
+            };
+          }
+        }
       }
 
       try {
@@ -317,10 +341,15 @@ export default function PlaygroundPage() {
             prompt,
             imageConfig: imageGenConfig,
             apiType,
+            inputImage,
           },
           (error) => {
             console.error('Image generation error:', error);
             toast.error(`图片生成失败: ${error.message}`);
+          },
+          () => {
+            // 心跳回调 - 可以用于更新 UI 状态表示连接仍然活跃
+            console.log('[Playground] 收到心跳，连接活跃');
           }
         );
 
@@ -330,7 +359,7 @@ export default function PlaygroundPage() {
           const parts = candidate.content?.parts || [];
           let imageData: { data: string; mimeType: string } | null = null;
           let textContent = '';
-          
+
           for (const part of parts) {
             if (part.inlineData) {
               imageData = {
@@ -341,7 +370,7 @@ export default function PlaygroundPage() {
               textContent += part.text;
             }
           }
-          
+
           if (imageData) {
             setMessages((prev) =>
               prev.map((msg) => {
@@ -351,10 +380,10 @@ export default function PlaygroundPage() {
                     versions: msg.versions.map((v) =>
                       v.id === assistantMessageId
                         ? {
-                            ...v,
-                            content: textContent.trim(),
-                            generatedImage: imageData!,
-                          }
+                          ...v,
+                          content: textContent.trim(),
+                          generatedImage: imageData!,
+                        }
                         : v
                     ),
                   };
@@ -374,7 +403,7 @@ export default function PlaygroundPage() {
       } catch (error) {
         console.error('Image generation error:', error);
         toast.error('图片生成失败，请重试');
-        
+
         // 更新消息显示错误
         setMessages((prev) =>
           prev.map((msg) => {
@@ -391,7 +420,7 @@ export default function PlaygroundPage() {
             return msg;
           })
         );
-        
+
         setStatus('error');
         setStreamingMessageId(null);
       }
@@ -459,11 +488,11 @@ export default function PlaygroundPage() {
 
       // 构建当前用户消息（支持多模态）
       let currentMessageContent: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>;
-      
+
       if (files && files.length > 0) {
         // 如果有附件，使用多模态格式
         currentMessageContent = [];
-        
+
         // 添加文本内容
         if (userContent) {
           currentMessageContent.push({
@@ -471,7 +500,7 @@ export default function PlaygroundPage() {
             text: userContent,
           });
         }
-        
+
         // 添加图片附件
         for (const file of files) {
           if (file.type === 'file' && file.mediaType?.startsWith('image/')) {
@@ -524,10 +553,10 @@ export default function PlaygroundPage() {
                     versions: msg.versions.map((v) =>
                       v.id === assistantMessageId
                         ? {
-                            ...v,
-                            content: fullContent,
-                            thinkingContent: fullReasoningContent || undefined
-                          }
+                          ...v,
+                          content: fullContent,
+                          thinkingContent: fullReasoningContent || undefined
+                        }
                         : v
                     ),
                   };
@@ -566,11 +595,11 @@ export default function PlaygroundPage() {
     }
 
     setStatus('submitted');
-    
+
     // 根据模型类型和模式选择不同的处理方式
     if (isInImageGenerationMode) {
-      // 图片生成模式
-      sendImageGenerationRequest(message.text || '');
+      // 图片生成模式（支持文生图和图生图）
+      sendImageGenerationRequest(message.text || '', message.files);
     } else {
       // 聊天模式（包括普通模型和图片模型的对话模式）
       sendChatRequest(message.text || '', message.files);
@@ -671,6 +700,64 @@ export default function PlaygroundPage() {
     toast.success('图片已下载');
   }, []);
 
+  // 重新生成消息
+  // 找到对应的用户消息，删除该消息及其后的所有消息，然后重新发送
+  const handleRegenerate = useCallback((messageKey: string) => {
+    // 找到要重新生成的消息索引
+    const messageIndex = messages.findIndex(msg => msg.key === messageKey);
+    if (messageIndex === -1) return;
+
+    const targetMessage = messages[messageIndex];
+
+    // 如果是 assistant 消息，找到它前面的 user 消息
+    let userMessageIndex = messageIndex;
+    let userMessage = targetMessage;
+
+    if (targetMessage.from === 'assistant') {
+      // 向前查找最近的 user 消息
+      for (let i = messageIndex - 1; i >= 0; i--) {
+        if (messages[i].from === 'user') {
+          userMessageIndex = i;
+          userMessage = messages[i];
+          break;
+        }
+      }
+    }
+
+    if (userMessage.from !== 'user') {
+      toast.error('无法找到对应的用户消息');
+      return;
+    }
+
+    // 获取用户消息的内容和附件
+    const userContent = userMessage.versions[0]?.content || '';
+    const userAttachments = userMessage.attachments;
+
+    // 删除用户消息及其后的所有消息
+    setMessages(prev => prev.slice(0, userMessageIndex));
+
+    // 根据当前模式重新发送
+    if (isInImageGenerationMode) {
+      // 图片生成模式
+      const files = userAttachments?.map(att => ({
+        url: att.url,
+        mediaType: att.mediaType,
+        filename: att.filename,
+        type: att.type,
+      }));
+      sendImageGenerationRequest(userContent, files);
+    } else {
+      // 聊天模式
+      const files = userAttachments?.map(att => ({
+        url: att.url,
+        mediaType: att.mediaType,
+        filename: att.filename,
+        type: att.type,
+      }));
+      sendChatRequest(userContent, files);
+    }
+  }, [messages, isInImageGenerationMode, sendImageGenerationRequest, sendChatRequest]);
+
   return (
     <div className="flex gap-4 py-4 md:gap-6 md:py-6 h-[calc(100vh-var(--header-height)-2rem)] px-2 md:px-4 lg:px-6">
       {/* 左侧：模型配置 - 桌面端 */}
@@ -739,8 +826,8 @@ export default function PlaygroundPage() {
 
               {/* 提示信息 */}
               <div className="rounded-lg bg-muted p-4 text-sm text-muted-foreground space-y-2">
-                <div className='flex flex-row'><InfoIcon className='size-4 text-gray-500 shrink-0 mt-0.5 mr-1'/> 你正处于 Imagen 模式</div>
-                <p className='text-xs'>在此模式下，你可以控制图片生成的参数，但每一次生成都是独立上下文。请随时切换到Chat模式以连续对话。如果切换，你的聊天内容将被清空，请注意保存生成的图片。</p>
+                <div className='flex flex-row'><InfoIcon className='size-4 text-gray-500 shrink-0 mt-0.5 mr-1' /> 你正处于 Imagen 模式</div>
+                <p className='text-xs'>在此模式下，你可以控制图片生成的参数，但每一次生成都是独立上下文。请随时切换到 Chat 模式以连续对话。如果切换，你的聊天内容将被清空，请注意保存生成的图片。</p>
               </div>
             </>
           ) : (
@@ -864,165 +951,161 @@ export default function PlaygroundPage() {
             </button>
           </SheetTrigger>
           <SheetContent side="bottom" className="h-[85vh] p-0">
-          <SheetHeader className="px-6 py-4 border-b">
-            <SheetTitle>{isInImageGenerationMode ? '图片生成参数' : '模型参数'}</SheetTitle>
-          </SheetHeader>
-          <div className="space-y-12 overflow-y-auto overflow-x-hidden h-[calc(100%-4rem)] px-6 py-6">
-            {isInImageGenerationMode ? (
-              <>
-                {/* 图片生成配置 - 移动端 */}
-                {/* Aspect Ratio */}
-                <div className="space-y-4">
-                  <Label>
-                    <Tooltip content="生成图片的宽高比。不同的宽高比适合不同的使用场景。">
-                      <span className="cursor-help font-medium">宽高比</span>
-                    </Tooltip>
-                  </Label>
-                  <Select
-                    value={imageConfig.aspectRatio}
-                    onValueChange={(value: ImageAspectRatio) =>
-                      setImageConfig(prev => ({ ...prev, aspectRatio: value }))
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="选择宽高比" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {aspectRatioOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+            <SheetHeader className="px-6 py-4 border-b">
+              <SheetTitle>{isInImageGenerationMode ? '图片生成参数' : '模型参数'}</SheetTitle>
+            </SheetHeader>
+            <div className="space-y-12 overflow-y-auto overflow-x-hidden h-[calc(100%-4rem)] px-6 py-6">
+              {isInImageGenerationMode ? (
+                <>
+                  {/* 图片生成配置 - 移动端 */}
+                  {/* Aspect Ratio */}
+                  <div className="space-y-4">
+                    <Label>
+                      <Tooltip content="生成图片的宽高比。不同的宽高比适合不同的使用场景。">
+                        <span className="cursor-help font-medium">宽高比</span>
+                      </Tooltip>
+                    </Label>
+                    <Select
+                      value={imageConfig.aspectRatio}
+                      onValueChange={(value: ImageAspectRatio) =>
+                        setImageConfig(prev => ({ ...prev, aspectRatio: value }))
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="选择宽高比" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {aspectRatioOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                {/* Image Size */}
-                <div className="space-y-4">
-                  <Label>
-                    <Tooltip content={supportsImageSize(model) ? "生成图片的分辨率。更高的分辨率会产生更清晰的图片，但可能需要更长的生成时间。" : "当前模型不支持图片尺寸控制"}>
-                      <span className={`cursor-help font-medium ${!supportsImageSize(model) ? 'text-muted-foreground' : ''}`}>图片尺寸</span>
-                    </Tooltip>
-                  </Label>
-                  <Select
-                    value={imageConfig.imageSize}
-                    onValueChange={(value: ImageSize) =>
-                      setImageConfig(prev => ({ ...prev, imageSize: value }))
-                    }
-                    disabled={!supportsImageSize(model)}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="选择图片尺寸" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {imageSizeOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                  {/* Image Size */}
+                  <div className="space-y-4">
+                    <Label>
+                      <Tooltip content={supportsImageSize(model) ? "生成图片的分辨率。更高的分辨率会产生更清晰的图片，但可能需要更长的生成时间。" : "当前模型不支持图片尺寸控制"}>
+                        <span className={`cursor-help font-medium ${!supportsImageSize(model) ? 'text-muted-foreground' : ''}`}>图片尺寸</span>
+                      </Tooltip>
+                    </Label>
+                    <Select
+                      value={imageConfig.imageSize}
+                      onValueChange={(value: ImageSize) =>
+                        setImageConfig(prev => ({ ...prev, imageSize: value }))
+                      }
+                      disabled={!supportsImageSize(model)}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="选择图片尺寸" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {imageSizeOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                {/* 提示信息 */}
-                <div className="rounded-lg bg-muted p-4 text-sm text-muted-foreground">
-                  <p className="font-medium mb-2">提示</p>
-                  <ul className="list-disc list-inside space-y-1">
-                    <li>输入描述性文字来生成图片</li>
-                    <li>描述越详细，生成效果越好</li>
-                    <li>支持中英文提示词</li>
-                  </ul>
-                </div>
-              </>
-            ) : (
-              <>
-                {/* 聊天模型配置 - 移动端 */}
-                {/* Temperature */}
-                <div className="space-y-10">
-                  <Label>
-                    <Tooltip content="控制输出的随机性。较高的值（如 1.8）会使输出更随机和创造性，较低的值（如 0.2）会使其更确定和专注。">
-                      <span className="cursor-help font-medium">Temperature</span>
-                    </Tooltip>
-                  </Label>
-                  <Slider
-                    value={[config.temperature]}
-                    onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, temperature: value[0] }))}
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    aria-label="Temperature"
-                  />
-                </div>
+                  {/* 提示信息 */}
+                  <div className="rounded-lg bg-muted p-4 text-sm text-muted-foreground space-y-2">
+                    <div className='flex flex-row'><InfoIcon className='size-4 text-gray-500 shrink-0 mt-0.5 mr-1' /> 你正处于 Imagen 模式</div>
+                    <p className='text-xs'>在此模式下，你可以控制图片生成的参数，但每一次生成都是独立上下文。请随时切换到 Chat 模式以连续对话。如果切换，你的聊天内容将被清空，请注意保存生成的图片。</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* 聊天模型配置 - 移动端 */}
+                  {/* Temperature */}
+                  <div className="space-y-10">
+                    <Label>
+                      <Tooltip content="控制输出的随机性。较高的值（如 1.8）会使输出更随机和创造性，较低的值（如 0.2）会使其更确定和专注。">
+                        <span className="cursor-help font-medium">Temperature</span>
+                      </Tooltip>
+                    </Label>
+                    <Slider
+                      value={[config.temperature]}
+                      onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, temperature: value[0] }))}
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      aria-label="Temperature"
+                    />
+                  </div>
 
-                {/* Max Tokens */}
-                <div className="space-y-10">
-                  <Label htmlFor="maxTokens-mobile">
-                    <Tooltip content="生成的最大 token 数量。一个 token 大约相当于 4 个字符或 0.75 个单词。更高的值允许更长的响应，但也会增加成本和延迟。">
-                      <span className="cursor-help font-medium">Max Tokens</span>
-                    </Tooltip>
-                  </Label>
-                  <Input
-                    id="maxTokens-mobile"
-                    type="number"
-                    value={config.maxTokens}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfig(prev => ({ ...prev, maxTokens: parseInt(e.target.value) }))}
-                    className="w-full"
-                  />
-                </div>
+                  {/* Max Tokens */}
+                  <div className="space-y-10">
+                    <Label htmlFor="maxTokens-mobile">
+                      <Tooltip content="生成的最大 token 数量。一个 token 大约相当于 4 个字符或 0.75 个单词。更高的值允许更长的响应，但也会增加成本和延迟。">
+                        <span className="cursor-help font-medium">Max Tokens</span>
+                      </Tooltip>
+                    </Label>
+                    <Input
+                      id="maxTokens-mobile"
+                      type="number"
+                      value={config.maxTokens}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfig(prev => ({ ...prev, maxTokens: parseInt(e.target.value) }))}
+                      className="w-full"
+                    />
+                  </div>
 
-                {/* Top P */}
-                <div className="space-y-10">
-                  <Label>
-                    <Tooltip content="核采样参数。控制模型考虑的 token 范围。例如，0.1 意味着只考虑概率最高的 10% 的 token。较低的值使输出更确定，较高的值增加多样性。">
-                      <span className="cursor-help font-medium">Top P</span>
-                    </Tooltip>
-                  </Label>
-                  <Slider
-                    value={[config.topP]}
-                    onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, topP: value[0] }))}
-                    min={0}
-                    max={1}
-                    step={0.1}
-                    aria-label="Top P"
-                  />
-                </div>
+                  {/* Top P */}
+                  <div className="space-y-10">
+                    <Label>
+                      <Tooltip content="核采样参数。控制模型考虑的 token 范围。例如，0.1 意味着只考虑概率最高的 10% 的 token。较低的值使输出更确定，较高的值增加多样性。">
+                        <span className="cursor-help font-medium">Top P</span>
+                      </Tooltip>
+                    </Label>
+                    <Slider
+                      value={[config.topP]}
+                      onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, topP: value[0] }))}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      aria-label="Top P"
+                    />
+                  </div>
 
-                {/* Frequency Penalty */}
-                <div className="space-y-10">
-                  <Label>
-                    <Tooltip content="降低重复相同内容的可能性。正值会根据 token 在文本中出现的频率来惩罚它们，减少逐字重复的可能性。">
-                      <span className="cursor-help font-medium">Frequency Penalty</span>
-                    </Tooltip>
-                  </Label>
-                  <Slider
-                    value={[config.frequencyPenalty]}
-                    onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, frequencyPenalty: value[0] }))}
-                    min={-2}
-                    max={2}
-                    step={0.01}
-                    aria-label="Frequency Penalty"
-                  />
-                </div>
+                  {/* Frequency Penalty */}
+                  <div className="space-y-10">
+                    <Label>
+                      <Tooltip content="降低重复相同内容的可能性。正值会根据 token 在文本中出现的频率来惩罚它们，减少逐字重复的可能性。">
+                        <span className="cursor-help font-medium">Frequency Penalty</span>
+                      </Tooltip>
+                    </Label>
+                    <Slider
+                      value={[config.frequencyPenalty]}
+                      onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, frequencyPenalty: value[0] }))}
+                      min={-2}
+                      max={2}
+                      step={0.01}
+                      aria-label="Frequency Penalty"
+                    />
+                  </div>
 
-                {/* Presence Penalty */}
-                <div className="space-y-10">
-                  <Label>
-                    <Tooltip content="增加谈论新话题的可能性。正值会根据 token 是否已经出现在文本中来惩罚它们，鼓励模型探索新的主题和概念。">
-                      <span className="cursor-help font-medium">Presence Penalty</span>
-                    </Tooltip>
-                  </Label>
-                  <Slider
-                    value={[config.presencePenalty]}
-                    onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, presencePenalty: value[0] }))}
-                    min={-2}
-                    max={2}
-                    step={0.01}
-                    aria-label="Presence Penalty"
-                  />
-                </div>
-              </>
-            )}
-          </div>
+                  {/* Presence Penalty */}
+                  <div className="space-y-10">
+                    <Label>
+                      <Tooltip content="增加谈论新话题的可能性。正值会根据 token 是否已经出现在文本中来惩罚它们，鼓励模型探索新的主题和概念。">
+                        <span className="cursor-help font-medium">Presence Penalty</span>
+                      </Tooltip>
+                    </Label>
+                    <Slider
+                      value={[config.presencePenalty]}
+                      onValueChange={(value: number[]) => setConfig(prev => ({ ...prev, presencePenalty: value[0] }))}
+                      min={-2}
+                      max={2}
+                      step={0.01}
+                      aria-label="Presence Penalty"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           </SheetContent>
         </Sheet>
         <StickyBanner className="bg-gradient-to-b from-blue-500 to-blue-600">
@@ -1091,25 +1174,25 @@ export default function PlaygroundPage() {
                             ) : (
                               <>
                                 {version.generatedImage ? (
-                                      // 图片生成完成：显示 ImageGeneration 组件包裹的图片
-                                      <ImageGeneration>
-                                        <img
-                                          src={`data:${version.generatedImage.mimeType};base64,${version.generatedImage.data}`}
-                                          alt="生成的图片"
-                                          className="max-w-full h-auto object-cover"
-                                          style={{ maxHeight: '512px' }}
-                                        />
-                                      </ImageGeneration>
+                                  // 图片生成完成：显示 ImageGeneration 组件包裹的图片
+                                  <ImageGeneration>
+                                    <img
+                                      src={`data:${version.generatedImage.mimeType};base64,${version.generatedImage.data}`}
+                                      alt="生成的图片"
+                                      className="max-w-full h-auto object-cover"
+                                      style={{ maxHeight: '512px' }}
+                                    />
+                                  </ImageGeneration>
                                 ) : message.from === 'assistant' && streamingMessageId === version.id && !version.content ? (
-                                      // 等待响应时显示 Spinner（聊天模式和图片生成模式都用）
-                                      <div className="flex items-center gap-3">
-                                        <Spinner />
-                                        {isInImageGenerationMode && (
-                                          <span className="text-sm text-muted-foreground">
-                                            图片生成中，这可能需要至多一分钟来完成。
-                                          </span>
-                                        )}
-                                      </div>
+                                  // 等待响应时显示 Spinner（聊天模式和图片生成模式都用）
+                                  <div className="flex items-center gap-3">
+                                    <Spinner />
+                                    {isInImageGenerationMode && (
+                                      <span className="text-sm text-muted-foreground">
+                                        图片生成中，这可能需要至多需要数分钟来完成。
+                                      </span>
+                                    )}
+                                  </div>
                                 ) : (
                                   // 显示文本响应
                                   <MessageResponse>
@@ -1125,6 +1208,13 @@ export default function PlaygroundPage() {
                                 {version.generatedImage ? (
                                   // 图片消息的操作按钮
                                   <>
+                                    <MessageAction
+                                      onClick={() => handleRegenerate(message.key)}
+                                      tooltip="重新生成"
+                                      disabled={status === 'streaming'}
+                                    >
+                                      <RefreshCwIcon className="size-4" />
+                                    </MessageAction>
                                     <MessageAction
                                       onClick={() => handleDownloadImage(version.generatedImage!.data, version.generatedImage!.mimeType)}
                                       tooltip="下载图片"
@@ -1143,6 +1233,13 @@ export default function PlaygroundPage() {
                                 ) : (
                                   // 文本消息的操作按钮
                                   <>
+                                    <MessageAction
+                                      onClick={() => handleRegenerate(message.key)}
+                                      tooltip="重新生成"
+                                      disabled={status === 'streaming'}
+                                    >
+                                      <RefreshCwIcon className="size-4" />
+                                    </MessageAction>
                                     <MessageAction
                                       onClick={() => handleCopyMessage(version.content)}
                                       tooltip="复制"

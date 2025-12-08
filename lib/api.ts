@@ -1048,6 +1048,11 @@ export interface ImageGenerationRequest {
   prompt: string;
   imageConfig?: ImageGenerationConfig;
   apiType?: ApiType;
+  // 图生图：附带的图片数据
+  inputImage?: {
+    mimeType: string;
+    data: string; // Base64 编码的图片数据
+  };
 }
 
 export interface ImageGenerationResponse {
@@ -1066,13 +1071,42 @@ export interface ImageGenerationResponse {
   }>;
 }
 
+// SSE 事件类型
+export type SSEEventType = 'heartbeat' | 'result' | 'error';
+
+export interface SSEHeartbeatEvent {
+  type: 'heartbeat';
+  timestamp: number;
+}
+
+export interface SSEResultEvent {
+  type: 'result';
+  data: ImageGenerationResponse;
+}
+
+export interface SSEErrorEvent {
+  type: 'error';
+  error: {
+    message: string;
+    code?: string;
+  };
+}
+
+export type SSEEvent = SSEHeartbeatEvent | SSEResultEvent | SSEErrorEvent;
+
 /**
- * 生成图片
+ * 生成图片（SSE 流式响应）
  * POST /v1beta/models/{model}:generateContent
+ *
+ * SSE 响应格式：
+ * - 心跳事件（每30秒）：保持连接活跃
+ * - 结果事件：包含生成的图片数据
+ * - 错误事件：包含错误信息
  */
 export async function generateImage(
   request: ImageGenerationRequest,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
+  onHeartbeat?: () => void
 ): Promise<ImageGenerationResponse | null> {
   let token = getStoredToken();
   if (!token) {
@@ -1082,28 +1116,47 @@ export async function generateImage(
   }
 
   const makeRequest = async (authToken: string): Promise<Response> => {
-    const body = {
+    // 构建 parts 数组
+    const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
+    
+    // 添加文本提示
+    if (request.prompt) {
+      parts.push({ text: request.prompt });
+    }
+    
+    // 如果有输入图片（图生图），添加图片数据
+    if (request.inputImage) {
+      parts.push({
+        inlineData: {
+          mimeType: request.inputImage.mimeType,
+          data: request.inputImage.data,
+        },
+      });
+    }
+
+    const body: any = {
       contents: [
         {
           role: 'user',
-          parts: [
-            {
-              text: request.prompt,
-            },
-          ],
+          parts,
         },
       ],
-      generationConfig: request.imageConfig ? {
+    };
+    
+    // 添加图片生成配置
+    if (request.imageConfig) {
+      body.generationConfig = {
         imageConfig: {
           aspectRatio: request.imageConfig.aspectRatio,
           imageSize: request.imageConfig.imageSize,
         },
-      } : undefined,
-    };
+      };
+    }
 
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${authToken}`,
+      'Accept': 'text/event-stream',
     };
     
     if (request.apiType) {
@@ -1154,8 +1207,92 @@ export async function generateImage(
       throw err;
     }
 
-    const data: ImageGenerationResponse = await response.json();
-    return data;
+    // 检查响应类型，判断是 SSE 还是普通 JSON
+    const contentType = response.headers.get('content-type') || '';
+    
+    if (contentType.includes('text/event-stream')) {
+      // SSE 流式响应处理
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('无法读取响应流');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let result: ImageGenerationResponse | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine) continue;
+          
+          // 解析 SSE 事件
+          if (trimmedLine.startsWith('event:')) {
+            // 事件类型行，继续读取数据行
+            continue;
+          }
+          
+          if (trimmedLine.startsWith('data:')) {
+            const dataContent = trimmedLine.slice(5).trim();
+            
+            // 跳过 [DONE] 结束标记
+            if (dataContent === '[DONE]') {
+              console.log('[generateImage] 收到 SSE 结束标记');
+              continue;
+            }
+            
+            if (!dataContent) continue;
+            
+            try {
+              const eventData = JSON.parse(dataContent);
+              
+              // 根据事件类型处理
+              if (eventData.type === 'heartbeat') {
+                // 心跳事件
+                console.log('[generateImage] 收到心跳事件');
+                onHeartbeat?.();
+              } else if (eventData.type === 'error') {
+                // 错误事件
+                const errorMsg = eventData.error?.message || '图片生成失败';
+                const err = new Error(errorMsg);
+                onError?.(err);
+                throw err;
+              } else if (eventData.type === 'result' || eventData.candidates) {
+                // 结果事件 - 可能是 { type: 'result', data: {...} } 或直接是响应数据
+                result = eventData.data || eventData;
+              } else {
+                // 尝试作为直接的响应数据处理
+                if (eventData.candidates) {
+                  result = eventData;
+                }
+              }
+            } catch (e) {
+              console.error('[generateImage] 解析 SSE 数据失败:', e, trimmedLine);
+            }
+          }
+        }
+      }
+
+      if (!result) {
+        throw new Error('未收到有效的图片生成结果');
+      }
+
+      return result;
+    } else {
+      // 普通 JSON 响应（兼容旧格式）
+      const data: ImageGenerationResponse = await response.json();
+      return data;
+    }
   } catch (error) {
     onError?.(error as Error);
     throw error;
