@@ -77,7 +77,7 @@ export default function Home() {
       {/* Logo Loop Section */}
       <section className="relative bg-black py-16">
         <div className="mx-auto max-w-7xl px-4 md:px-6 lg:px-8">
-          <p className="text-center text-md text-white mb-8 font-semibold">深受合作伙伴信任</p>
+          <p className="text-center text-md text-white mb-8 font-semibold">Trusted by Partners</p>
           <div className="h-24 relative overflow-hidden">
             <LogoLoop
               logos={[
@@ -170,7 +170,7 @@ export default function Home() {
               scaleOnHover
               fadeOut
               fadeOutColor="#000000"
-              ariaLabel="合作伙伴"
+              ariaLabel="Partners"
             />
           </div>
         </div>

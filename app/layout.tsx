@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "AntiHub",
-  description: "共享账号管理系统",
+  description: "Shared Account Management System",
 };
 
 export default function RootLayout({
@@ -26,7 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
@@ -39,7 +39,7 @@ export default function RootLayout({
           <Suspense fallback={<div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
             <div className="px-4 lg:px-6">
               <div className="flex items-center justify-center min-h-screen">
-                <MorphingSquare message="加载中..." />
+                <MorphingSquare message="Loading..." />
               </div>
             </div>
           </div>}>

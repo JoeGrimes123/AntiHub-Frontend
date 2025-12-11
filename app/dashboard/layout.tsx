@@ -29,20 +29,20 @@ export default function DashboardLayout({
 
     if (loginSuccess === 'success' && token && userParam) {
       try {
-        // 立即同步存储到 localStorage
+        // Immediately sync to localStorage
         localStorage.setItem('access_token', token);
         localStorage.setItem('user', decodeURIComponent(userParam));
         console.log('Access token synced to localStorage');
         
-        // 保存 refresh_token（关键：必须保存，否则无法刷新）
+        // Save refresh_token (critical: must save, otherwise cannot refresh)
         if (refreshToken) {
           localStorage.setItem('refresh_token', refreshToken);
           console.log('Refresh token synced to localStorage:', refreshToken.substring(0, 20) + '...');
         } else {
-          console.warn('警告：登录成功但没有收到 refresh_token');
+          console.warn('Warning: Login successful but no refresh_token received');
         }
-        
-        // 保存 token 过期时间
+
+        // Save token expiration time
         if (expiresIn) {
           const expiresAt = Date.now() + parseInt(expiresIn, 10) * 1000;
           localStorage.setItem('token_expires_at', String(expiresAt));
@@ -53,17 +53,17 @@ export default function DashboardLayout({
       }
     }
 
-    // 设置主动令牌刷新
+    // Set up proactive token refresh
     const cleanup = setupTokenRefresh(() => {
-      // 刷新失败时，重定向到登录页
+      // When refresh fails, redirect to login page
       console.error('Token refresh failed, redirecting to login');
       window.location.href = '/auth?error=session_expired';
     });
 
-    // 标记认证已就绪
+    // Mark authentication as ready
     setIsAuthReady(true);
 
-    // 清理函数
+    // Cleanup function
     return cleanup;
   }, [searchParams]);
 
@@ -71,7 +71,7 @@ export default function DashboardLayout({
   if (!isAuthReady) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <MorphingSquare message="加载中..." />
+        <MorphingSquare message="Loading..." />
       </div>
     );
   }
