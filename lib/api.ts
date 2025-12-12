@@ -1522,6 +1522,17 @@ export interface KiroConsumptionStats {
   private_credit: string;
 }
 
+export interface KiroAWSBuilderAuthorizeResponse {
+  success: boolean;
+  data: {
+    auth_url: string;
+    user_code: string;
+    verification_uri: string;
+    state: string;
+    expires_in: number;
+  };
+}
+
 /**
  * 获取Kiro OAuth授权URL
  */
@@ -1536,6 +1547,31 @@ export async function getKiroOAuthAuthorizeUrl(
       body: JSON.stringify({ provider, is_shared: isShared }),
     }
   );
+}
+
+/**
+ * 获取Kiro AWS Builder ID 设备授权URL
+ */
+export async function getKiroAWSBuilderAuthorizeUrl(
+  isShared: number = 0
+): Promise<KiroAWSBuilderAuthorizeResponse> {
+  return fetchWithAuth<KiroAWSBuilderAuthorizeResponse>(
+    `${API_BASE_URL}/api/kiro/aws-builder/authorize`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ is_shared: isShared }),
+    }
+  );
+}
+
+/**
+ * 完成Kiro AWS Builder ID登录（服务端轮询token并创建账号）
+ */
+export async function submitKiroAWSBuilderCallback(state: string): Promise<any> {
+  return fetchWithAuth<any>(`${API_BASE_URL}/api/kiro/aws-builder/callback`, {
+    method: 'POST',
+    body: JSON.stringify({ state }),
+  });
 }
 
 /**

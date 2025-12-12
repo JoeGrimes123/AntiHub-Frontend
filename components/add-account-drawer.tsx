@@ -1,7 +1,15 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { getOAuthAuthorizeUrl, submitOAuthCallback, getKiroOAuthAuthorizeUrl, getCurrentUser, pollKiroOAuthStatus } from '@/lib/api';
+import {
+  getOAuthAuthorizeUrl,
+  submitOAuthCallback,
+  getKiroOAuthAuthorizeUrl,
+  getKiroAWSBuilderAuthorizeUrl,
+  submitKiroAWSBuilderCallback,
+  getCurrentUser,
+  pollKiroOAuthStatus,
+} from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Button as StatefulButton } from '@/components/ui/stateful-button';
 import { Input } from '@/components/ui/input';
@@ -31,11 +39,13 @@ export function AddAccountDrawer({ open, onOpenChange, onSuccess }: AddAccountDr
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [step, setStep] = useState<'platform' | 'provider' | 'type' | 'method' | 'authorize'>('platform');
   const [platform, setPlatform] = useState<'antigravity' | 'kiro' | ''>('');
-  const [provider, setProvider] = useState<'Google' | 'Github' | ''>(''); // Kiro OAuth提供商
+  const [provider, setProvider] = useState<'Google' | 'Github' | 'AWSBuilderID' | ''>(''); // Kiro登录方式
   const [accountType, setAccountType] = useState<0 | 1>(0); // 0=专属, 1=共享
   const [loginMethod, setLoginMethod] = useState<'antihook' | 'manual' | ''>(''); // Antigravity 登录方式
   const [oauthUrl, setOauthUrl] = useState('');
   const [oauthState, setOauthState] = useState(''); // Kiro OAuth state
+  const [kiroUserCode, setKiroUserCode] = useState('');
+  const [kiroVerificationUri, setKiroVerificationUri] = useState('');
   const [callbackUrl, setCallbackUrl] = useState('');
   const [hasBeta, setHasBeta] = useState(false);
   const [isCheckingBeta, setIsCheckingBeta] = useState(true);
@@ -108,13 +118,24 @@ export function AddAccountDrawer({ open, onOpenChange, onSuccess }: AddAccountDr
       } else {
         // Kiro 账号直接进入授权
         try {
-          const result = await getKiroOAuthAuthorizeUrl(provider as 'Google' | 'Github', accountType);
-          setOauthUrl(result.data.auth_url);
-          setOauthState(result.data.state);
-          setCountdown(result.data.expires_in);
-          setIsWaitingAuth(true);
-          startCountdownTimer(result.data.expires_in);
-          startPollingOAuthStatus(result.data.state);
+          if (provider === 'AWSBuilderID') {
+            const result = await getKiroAWSBuilderAuthorizeUrl(accountType);
+            setOauthUrl(result.data.auth_url);
+            setOauthState(result.data.state);
+            setKiroUserCode(result.data.user_code);
+            setKiroVerificationUri(result.data.verification_uri);
+            setCountdown(result.data.expires_in);
+            setIsWaitingAuth(true);
+            startCountdownTimer(result.data.expires_in);
+          } else {
+            const result = await getKiroOAuthAuthorizeUrl(provider as 'Google' | 'Github', accountType);
+            setOauthUrl(result.data.auth_url);
+            setOauthState(result.data.state);
+            setCountdown(result.data.expires_in);
+            setIsWaitingAuth(true);
+            startCountdownTimer(result.data.expires_in);
+            startPollingOAuthStatus(result.data.state);
+          }
           setStep('authorize');
         } catch (err) {
           toasterRef.current?.show({
@@ -187,6 +208,25 @@ export function AddAccountDrawer({ open, onOpenChange, onSuccess }: AddAccountDr
       }
       setOauthUrl('');
       setCallbackUrl('');
+    }
+  };
+
+  const handleCompleteAWSBuilderID = async () => {
+    if (!oauthState) {
+      throw new Error('缺少state参数，请返回重新开始');
+    }
+    const result = await submitKiroAWSBuilderCallback(oauthState);
+    if (result?.success) {
+      toasterRef.current?.show({
+        title: '授权成功',
+        message: 'Kiro账号已成功添加',
+        variant: 'success',
+        position: 'top-right',
+      });
+      window.dispatchEvent(new CustomEvent('accountAdded'));
+      onOpenChange(false);
+      resetState();
+      onSuccess?.();
     }
   };
 
@@ -360,6 +400,8 @@ export function AddAccountDrawer({ open, onOpenChange, onSuccess }: AddAccountDr
     setLoginMethod('');
     setOauthUrl('');
     setOauthState('');
+    setKiroUserCode('');
+    setKiroVerificationUri('');
     setCallbackUrl('');
     setIsCheckingBeta(true);
     setCountdown(600);
@@ -575,24 +617,51 @@ export function AddAccountDrawer({ open, onOpenChange, onSuccess }: AddAccountDr
                     </p>
                   </div>
                 </label>
+
+                <label
+                  className={cn(
+                    "flex items-center gap-3 p-4 border-2 rounded-lg cursor-pointer transition-colors",
+                    provider === 'AWSBuilderID' ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="provider"
+                    value="AWSBuilderID"
+                    checked={provider === 'AWSBuilderID'}
+                    onChange={() => setProvider('AWSBuilderID')}
+                    className="w-4 h-4"
+                  />
+                  <div className="w-10 h-10 rounded-lg bg-[#FF9900] flex items-center justify-center text-black font-bold">
+                    AWS
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold">AWS Builder ID</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      设备码授权（无需 AntiHook）
+                    </p>
+                  </div>
+                </label>
               </div>
 
-              <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-                <p className="text-xs text-yellow-600 dark:text-yellow-400">
-                  <strong>重要指示</strong>
-                  <br />
-                  要登录 Kiro ，请先下载并运行至少一次{' '}
-                  <a
-                    href="https://github.com/AntiHub-Project/AntiHook/releases"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline hover:text-yellow-700 dark:hover:text-yellow-300"
-                  >
-                    AntiHook
-                  </a>
-                  。
-                </p>
-              </div>
+              {provider !== 'AWSBuilderID' && (
+                <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+                  <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                    <strong>重要指示</strong>
+                    <br />
+                    要登录 Kiro ，请先下载并运行至少一次{' '}
+                    <a
+                      href="https://github.com/AntiHub-Project/AntiHook/releases"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline hover:text-yellow-700 dark:hover:text-yellow-300"
+                    >
+                      AntiHook
+                    </a>
+                    。
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -741,75 +810,164 @@ export function AddAccountDrawer({ open, onOpenChange, onSuccess }: AddAccountDr
           {step === 'authorize' && (
             <div className="space-y-6">
               {platform === 'kiro' ? (
-                // Kiro账号 - 显示等待授权状态
-                <>
-                  <div className="space-y-3">
-                    <Label className="text-base font-semibold">账号授权</Label>
-                    <p className="text-sm text-muted-foreground">
-                      点击下方按钮在新窗口完成 {provider} 授权
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        onClick={handleOpenOAuthUrl}
-                        className="flex-1"
-                        size="lg"
-                        disabled={!oauthUrl || countdown === 0}
-                      >
-                        <IconExternalLink className="size-4 mr-2" />
-                        打开授权页面
-                      </Button>
-                      <Button
-                        onClick={() => {
-                          if (oauthUrl) {
-                            navigator.clipboard.writeText(oauthUrl);
-                            toasterRef.current?.show({
-                              title: '复制成功',
-                              message: '授权链接已复制到剪贴板',
-                              variant: 'success',
-                              position: 'top-right',
-                            });
-                          }
-                        }}
-                        variant="outline"
-                        size="lg"
-                        disabled={!oauthUrl || countdown === 0}
-                      >
-                        <IconCopy className="size-4 mr-2" />
-                        复制链接
-                      </Button>
+                provider === 'AWSBuilderID' ? (
+                  // Kiro - AWS Builder ID
+                  <>
+                    <div className="space-y-3">
+                      <Label className="text-base font-semibold">AWS Builder ID 授权</Label>
+                      <p className="text-sm text-muted-foreground">
+                        打开 AWS 设备授权页面完成登录，然后点击“完成添加”。
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={handleOpenOAuthUrl}
+                          className="flex-1"
+                          size="lg"
+                          disabled={!oauthUrl || countdown === 0}
+                        >
+                          <IconExternalLink className="size-4 mr-2" />
+                          打开授权页面
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            if (oauthUrl) {
+                              navigator.clipboard.writeText(oauthUrl);
+                              toasterRef.current?.show({
+                                title: '复制成功',
+                                message: '授权链接已复制到剪贴板',
+                                variant: 'success',
+                                position: 'top-right',
+                              });
+                            }
+                          }}
+                          variant="outline"
+                          size="lg"
+                          disabled={!oauthUrl || countdown === 0}
+                        >
+                          <IconCopy className="size-4 mr-2" />
+                          复制链接
+                        </Button>
+                      </div>
                     </div>
-                  </div>
 
-                  {isWaitingAuth && countdown > 0 && (
-                    <div className="p-6 bg-muted/50 rounded-lg border-2 border-dashed border-primary/20">
-                      <div className="flex flex-col items-center justify-center space-y-4">
-                        <div className="relative">
-                          <div className="w-16 h-16 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-                        </div>
-                        <div className="text-center space-y-2">
-                          <p className="font-semibold text-lg">AntiHub 正在等待授权</p>
-                          <p className="text-sm text-muted-foreground">
-                            请在新窗口中完成 {provider} 授权
-                          </p>
-                          <p className="text-2xl font-mono font-bold text-primary">
-                            {formatCountdown(countdown)}
-                          </p>
+                    {(kiroUserCode || kiroVerificationUri) && (
+                      <div className="p-4 bg-muted/50 rounded-lg border">
+                        <div className="space-y-2">
+                          {kiroUserCode && (
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-xs text-muted-foreground">User Code</p>
+                                <p className="font-mono font-semibold text-lg">{kiroUserCode}</p>
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(kiroUserCode);
+                                  toasterRef.current?.show({
+                                    title: '复制成功',
+                                    message: 'User Code已复制到剪贴板',
+                                    variant: 'success',
+                                    position: 'top-right',
+                                  });
+                                }}
+                              >
+                                <IconCopy className="size-4 mr-2" />
+                                复制
+                              </Button>
+                            </div>
+                          )}
+                          {kiroVerificationUri && (
+                            <p className="text-xs text-muted-foreground break-all">
+                              Verification URL: <span className="font-mono">{kiroVerificationUri}</span>
+                            </p>
+                          )}
                           <p className="text-xs text-muted-foreground">
-                            授权完成后将自动添加账号
+                            剩余时间：<span className="font-mono">{formatCountdown(countdown)}</span>
                           </p>
                         </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {countdown === 0 && (
-                    <div className="p-4 bg-destructive/10 rounded-lg border border-destructive/20">
-                      <p className="text-sm text-destructive text-center">
-                        授权已超时，请返回重新开始
+                    {countdown === 0 && (
+                      <div className="p-4 bg-destructive/10 rounded-lg border border-destructive/20">
+                        <p className="text-sm text-destructive text-center">
+                          授权已超时，请返回重新开始
+                        </p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  // Kiro - Google/Github OAuth（自动轮询状态）
+                  <>
+                    <div className="space-y-3">
+                      <Label className="text-base font-semibold">账号授权</Label>
+                      <p className="text-sm text-muted-foreground">
+                        点击下方按钮在新窗口完成 {provider} 授权
                       </p>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={handleOpenOAuthUrl}
+                          className="flex-1"
+                          size="lg"
+                          disabled={!oauthUrl || countdown === 0}
+                        >
+                          <IconExternalLink className="size-4 mr-2" />
+                          打开授权页面
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            if (oauthUrl) {
+                              navigator.clipboard.writeText(oauthUrl);
+                              toasterRef.current?.show({
+                                title: '复制成功',
+                                message: '授权链接已复制到剪贴板',
+                                variant: 'success',
+                                position: 'top-right',
+                              });
+                            }
+                          }}
+                          variant="outline"
+                          size="lg"
+                          disabled={!oauthUrl || countdown === 0}
+                        >
+                          <IconCopy className="size-4 mr-2" />
+                          复制链接
+                        </Button>
+                      </div>
                     </div>
-                  )}
-                </>
+
+                    {isWaitingAuth && countdown > 0 && (
+                      <div className="p-6 bg-muted/50 rounded-lg border-2 border-dashed border-primary/20">
+                        <div className="flex flex-col items-center justify-center space-y-4">
+                          <div className="relative">
+                            <div className="w-16 h-16 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+                          </div>
+                          <div className="text-center space-y-2">
+                            <p className="font-semibold text-lg">AntiHub 正在等待授权</p>
+                            <p className="text-sm text-muted-foreground">
+                              请在新窗口中完成 {provider} 授权
+                            </p>
+                            <p className="text-2xl font-mono font-bold text-primary">
+                              {formatCountdown(countdown)}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              授权完成后将自动添加账号
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {countdown === 0 && (
+                      <div className="p-4 bg-destructive/10 rounded-lg border border-destructive/20">
+                        <p className="text-sm text-destructive text-center">
+                          授权已超时，请返回重新开始
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )
               ) : (
                 // Antigravity账号 - 手动提交回调
                 <>
@@ -885,14 +1043,24 @@ export function AddAccountDrawer({ open, onOpenChange, onSuccess }: AddAccountDr
 
           {step === 'authorize' ? (
             platform === 'kiro' ? (
-              // Kiro账号不需要手动提交
-              <Button
-                onClick={handleClose}
-                disabled={isWaitingAuth && countdown > 0}
-                className="flex-1 cursor-pointer"
-              >
-                {isWaitingAuth && countdown > 0 ? '等待授权中...' : '关闭'}
-              </Button>
+              provider === 'AWSBuilderID' ? (
+                <StatefulButton
+                  onClick={handleCompleteAWSBuilderID}
+                  disabled={countdown === 0}
+                  className="flex-1 cursor-pointer"
+                >
+                  完成添加
+                </StatefulButton>
+              ) : (
+                // Kiro OAuth（Google/Github）无需手动提交
+                <Button
+                  onClick={handleClose}
+                  disabled={isWaitingAuth && countdown > 0}
+                  className="flex-1 cursor-pointer"
+                >
+                  {isWaitingAuth && countdown > 0 ? '等待授权中...' : '关闭'}
+                </Button>
+              )
             ) : (
               // Antigravity账号需要提交回调
               <StatefulButton
